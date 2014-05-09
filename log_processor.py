@@ -20,6 +20,8 @@ with open(os.path.join('logs', 'paper_test_explicit_intro_outro.log'), 'rb') as 
             indexes = numpy.array([info[i+1]['INDEX'] - info[i]['INDEX'] for i in range(len(info)-1)])
             has_intro = 'intro' in info[0]['TITLE'].lower()
             has_outro = 'outro' in info[-1]['TITLE'].strip().lower()
+            #has_intro = False
+            #has_outro = False
             avg = float(rec[1])
 
             borders = rec[3][1:-1].split(',')
@@ -54,9 +56,11 @@ with open(os.path.join('logs', 'paper_test_explicit_intro_outro.log'), 'rb') as 
             print '%s\t%f\t%f\t%d' % (name, avg, even_avg, len(info))
 
             maximum = float(rec[2])
-            if avg < 0.5 * length/tracks:
+            #if avg < 0.5 * length/tracks:
+            if avg < 30:
                 good += 1
-            if even_avg < 0.5 * length/tracks:
+            #if even_avg < 0.5 * length/tracks:
+            if even_avg < 30:
                 even_good += 1
             avg_sum += avg
             max_sum += maximum

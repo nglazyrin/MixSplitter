@@ -27,7 +27,7 @@ def draw_spectrum(spectrum, timestamps, num):
 
 
 def main():
-    name = 'Artelized_-_Artelized_Visions_003_-_2014-03-19'
+    name = '4H_Community_Guest_Mix_The_2nd_Anniversary_of_Room51_Show_by_Breeze_Quadrat_PureFM'
     print name
     csv_file = os.path.join('.', 'data', name + experiment.plugin_suffix + '.csv')
     cue_file = os.path.join('.', 'data', name + '.cue')

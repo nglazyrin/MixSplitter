@@ -141,8 +141,8 @@ def remove_most_similar(data, borders, factor, sec_per_row, novelty, avg_track_l
         # if l1 == 0 and 5 < d * sec_per_row < 60:
         #     return 100000
         distance = t[4]
-        if sum_length * sec_per_row > avg_track_length * 1.25:
-            return 100000 * sum_length
+        # if sum_length * sec_per_row > avg_track_length * 1.25:
+        #     return 100000 * sum_length
         return sum_length * distance # TODO: was first_length * sum_length * distance
 
     similar = sorted(similar, key=key_function)
