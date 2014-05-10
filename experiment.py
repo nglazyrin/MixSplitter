@@ -101,8 +101,8 @@ def main():
             if info:
                 has_intro = 'intro' in info[0]['TITLE'].strip().lower()
                 has_outro = 'outro' in info[-1]['TITLE'].strip().lower()
-                has_intro = False
-                has_outro = False
+                #has_intro = False
+                #has_outro = False
                 csv_file = os.path.join(data_dir, name + plugin_suffix + '.csv')
                 self_sim_file = os.path.join(data_dir, name + plugin_suffix + '.sim')
                 if not os.path.isfile(csv_file):

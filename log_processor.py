@@ -1,6 +1,8 @@
 __author__ = 'Nikolay'
 
 import numpy
+import scipy.stats
+import scipy.stats.mstats
 import os
 from experiment import read_cue, get_diff
 
@@ -11,6 +13,15 @@ even_max_sum = 0
 count = 0
 good = 0
 even_good = 0
+mix_styles = {}
+with open('mix_list.txt', 'rb') as mixlist:
+    for line in mixlist:
+        rec = line.strip().split('\t')
+        mix_styles[rec[0]] = rec[1]
+
+proposed = []
+naive = []
+style_stats = {}
 with open(os.path.join('logs', 'paper_test_explicit_intro_outro.log'), 'rb') as log:
     for line in log:
         rec = line.strip().split('\t')
@@ -54,6 +65,8 @@ with open(os.path.join('logs', 'paper_test_explicit_intro_outro.log'), 'rb') as 
             even_max_sum += even_max
 
             print '%s\t%f\t%f\t%d' % (name, avg, even_avg, len(info))
+            proposed.append(avg)
+            naive.append(even_avg)
 
             maximum = float(rec[2])
             #if avg < 0.5 * length/tracks:
@@ -65,6 +78,28 @@ with open(os.path.join('logs', 'paper_test_explicit_intro_outro.log'), 'rb') as 
             avg_sum += avg
             max_sum += maximum
             count += 1
+
+            if mix_styles[name] not in style_stats:
+                style_stats[mix_styles[name]] = { 'count': 0, 'sum_avg': 0, 'sum_max': 0 , 'sum_even_avg': 0, 'sum_even_max': 0}
+            style_stats[mix_styles[name]]['count'] += 1
+            style_stats[mix_styles[name]]['sum_avg'] += avg
+            style_stats[mix_styles[name]]['sum_max'] += maximum
+            style_stats[mix_styles[name]]['sum_even_avg'] += even_avg
+            style_stats[mix_styles[name]]['sum_even_max'] += even_max
 print '%f\t%f' % (avg_sum / count, even_avg_sum / count)
 print '%f\t%f' % (max_sum / count, even_max_sum / count)
-print '%d\t%d'% (good, even_good)
+print '%d\t%d\n\n'% (good, even_good)
+
+
+print scipy.stats.normaltest(proposed)
+print scipy.stats.normaltest(naive)
+print scipy.stats.wilcoxon(proposed, naive)
+
+for style, stats in sorted(style_stats.items(), key=lambda x: x[1]['count'], reverse=True):
+    stats['sum_avg'] /= stats['count']
+    stats['sum_max'] /= stats['count']
+    stats['sum_even_avg'] /= stats['count']
+    stats['sum_even_max'] /= stats['count']
+    print '  %s & %s & %d & %.2f s & %.2f s \\\\ ' % (style, 'Proposed', stats['count'], stats['sum_avg'], stats['sum_max'])
+    print '  %s & %s & %d & %.2f s & %.2f s \\\\ ' % (style, 'Naive', stats['count'], stats['sum_even_avg'], stats['sum_even_max'])
+    print '  \\hline'
