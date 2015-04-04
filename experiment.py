@@ -6,6 +6,7 @@ import numpy
 import os
 import subprocess
 import tools
+import cProfile
 
 
 plugin_suffix = '_vamp_qm-vamp-plugins_qm-constantq_constantq'
@@ -50,9 +51,9 @@ def read_cue(filename):
 
 def extract_features(mp3):
     mp3_path = os.path.abspath(mp3).replace('\\', '/')
-    retcode = subprocess.call(vamp_path + ' -t ' + n3_path + ' "' + mp3_path + '" -w csv')
-    if retcode != 0:
-        print 'Feature extraction process exited with return code %d, skipping the %s' % (retcode, mp3)
+    return_code = subprocess.call(vamp_path + ' -t ' + n3_path + ' "' + mp3_path + '" -w csv')
+    if return_code != 0:
+        print 'Feature extraction process exited with return code %d, skipping the %s' % (return_code, mp3)
 
 
 def get_diff(cue_info, borders):
@@ -66,10 +67,10 @@ def get_diff(cue_info, borders):
 
         def sec_to_colon_separated(seconds):
             hrs = int(seconds / 3600)
-            mins = int((seconds % 3600) / 60)
+            minutes = int((seconds % 3600) / 60)
             secs = seconds % 60
-            return '%02d:%02d:%02d' % (hrs, mins, secs)
-        #print '%d. %s - %s' % (i + 1, sec_to_colon_separated(a), sec_to_colon_separated(b))
+            return '%02d:%02d:%02d' % (hrs, minutes, secs)
+        # print '%d. %s - %s' % (i + 1, sec_to_colon_separated(a), sec_to_colon_separated(b))
     return avg_diff / len(cue_info), max_diff
 
 
@@ -89,8 +90,10 @@ def main():
     data_dir = os.path.join('.', 'data')
     mp3_files = [f for f in os.listdir(data_dir) if os.path.isfile(os.path.join(data_dir, f)) and f.endswith('.mp3')]
     result = []
+    nc = tools.NoveltyCalculator()
     with open(os.path.join('logs', 'test.log'), 'wb') as log:
         for mp3 in mp3_files:
+            #mp3 = mp3_files[0]
             name = mp3[:-4]
             cue = os.path.join(data_dir, name + '.cue')
             info = None
@@ -115,6 +118,7 @@ def main():
                         borders = tools.detect_track_borders(data,
                                                              timestamps[-1],
                                                              len(info),
+                                                             nc,
                                                              self_sim=self_sim,
                                                              factor=factor,
                                                              has_intro=has_intro,
@@ -135,4 +139,5 @@ def main():
 
 
 if __name__ == '__main__':
+    #cProfile.run('main()')
     main()

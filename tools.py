@@ -4,91 +4,173 @@ import cPickle
 import numpy
 import numpy.linalg
 import scipy.signal
+import operator
 from scipy.spatial.distance import cosine
+from scipy.signal import argrelextrema
 
 from matplotlib.pylab import *
 from scipy.stats import norm
 from sklearn.preprocessing import normalize
 import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
 
 
-def remove_short_segments(data, borders, factor, sec_per_row):
-    filtered = set(borders)
-    i = 1
-    while i < len(borders) - 2:
-        if (borders[i + 1] - borders[i]) * sec_per_row < 30:
-            avg_1 = numpy.average(data[borders[i-1]*factor: borders[i]*factor], axis=0)
-            avg = numpy.average(data[borders[i]*factor: borders[i+1]*factor], axis=0)
-            avg1 = numpy.average(data[borders[i+1]*factor: borders[i+2]*factor], axis=0)
-            lim = 0.05
-            d_from_next = numpy.linalg.norm(avg1 - avg)
-            d_next_from_prev = numpy.linalg.norm(avg1 - avg_1)
-            if d_next_from_prev < lim:
-                if borders[i] in filtered:
-                    filtered.remove(borders[i])
-                filtered.remove(borders[i+1])
-                i += 2
-            elif d_from_next < lim:
-                filtered.remove(borders[i+1])
-                i += 1
-            # elif d_next_from_prev < d_from_prev:
-            #     if borders[i] in filtered:
-            #         filtered.remove(borders[i])
-            #     filtered.remove(borders[i+1])
-            # elif d_from_prev < d_next_from_prev:
-            #     filtered.remove(borders[i+1])
-        i += 1
-    return sorted(list(filtered))
+class NoveltyCalculator:
+    def __init__(self):
+        self.checkerboard_size = 8
+        self.checkerboard = NoveltyCalculator.get_checkerboard(self.checkerboard_size)
+
+    @staticmethod
+    def pdf_multivariate_gauss(x, mu, cov_1, part1):
+        '''
+        Caculate the multivariate normal density (pdf)
+
+        Keyword arguments:
+            x = numpy array of a "d x 1" sample vector
+            mu = numpy array of a "d x 1" mean vector
+            cov = inverted "numpy array of a d x d" covariance matrix
+        '''
+        # assert(mu.shape[0] > mu.shape[1]), 'mu must be a row vector'
+        # assert(x.shape[0] > x.shape[1]), 'x must be a row vector'
+        # assert(cov.shape[0] == cov.shape[1]), 'covariance matrix must be square'
+        # assert(mu.shape[0] == cov.shape[0]), 'cov_mat and mu_vec must have the same dimensions'
+        # assert(mu.shape[0] == x.shape[0]), 'mu and x must have the same dimensions'
+        d = x - mu
+        part2 = (-1/2) * (d.T.dot(cov_1)).dot(d)
+        return float(part1 * np.exp(part2))
+
+    @staticmethod
+    def get_checkerboard(cb_size):
+        o = numpy.ones([cb_size, cb_size])
+        xs = np.linspace(-1, 1, 2 * cb_size)
+        ys = np.linspace(-1, 1, 2 * cb_size)
+        result = numpy.array(numpy.bmat([[-o, o], [o, -o]]))
+        mu = numpy.array([0, 0])
+        covariance_matrix = numpy.array([[1, 0], [0, 1]])
+        inverted_covariance_matrix = np.linalg.inv(covariance_matrix)
+        part1 = 1 / ( ((2*np.pi)**(len(mu)/2)) * (np.linalg.det(covariance_matrix)**(1/2)) )
+        ix = 0
+        for x in xs:
+            iy = 0
+            for y in ys:
+                value = NoveltyCalculator.pdf_multivariate_gauss(numpy.array([x, y]), mu,
+                                                                 inverted_covariance_matrix, part1)
+                result[ix][iy] *= value
+                iy += 1
+            ix += 1
+        return result
+
+    def calc_novelty(self, self_similarity_matrix):
+        novelty = []
+        self_sim_size = self_similarity_matrix.shape[0]
+        for i in range(self_sim_size):
+            if i < self.checkerboard_size:
+                r = numpy.ix_(range(self.checkerboard_size - i, 2 * self.checkerboard_size),
+                              range(self.checkerboard_size - i, 2 * self.checkerboard_size))
+                cb = self.checkerboard[r]
+                ssr = numpy.ix_(range(0, cb.shape[0]), range(0, cb.shape[0]))
+            elif i > self_sim_size - self.checkerboard_size:
+                d = self_sim_size - i
+                r = numpy.ix_(range(0, self.checkerboard_size + d), range(0, self.checkerboard_size + d))
+                cb = self.checkerboard[r]
+                ssr = numpy.ix_(range(self_sim_size - cb.shape[0], self_sim_size),
+                                range(self_sim_size - cb.shape[0], self_sim_size))
+            else:
+                cb = self.checkerboard
+                ssr = numpy.ix_(range(i - self.checkerboard_size, i + self.checkerboard_size),
+                                range(i - self.checkerboard_size, i + self.checkerboard_size))
+            fragment = self_similarity_matrix[ssr]
+            sq = scipy.signal.convolve2d(cb, fragment, mode='valid')
+            novelty.append(sq[0][0])
+        return novelty
 
 
-def pdf_multivariate_gauss(x, mu, cov_1, part1):
+class Segment():
+    def __init__(self, start, end, feature_vector):
+        self.start = start
+        self.end = end
+        self.length = end - start
+        self.feature_vector = feature_vector
+        self.normalized_feature_vector = numpy.array(feature_vector, copy=True)
+        normalize_to_01(self.normalized_feature_vector)
+
+
+def distance(segment1, segment2):
+    #return numpy.linalg.norm(segment1.normalized_feature_vector - segment2.normalized_feature_vector)
+    return cosine(segment1.normalized_feature_vector, segment2.normalized_feature_vector)
+
+
+def key_function(segment1, segment2, max_length_with_no_penalty):
+    sum_length = segment2.end - segment1.start
+    segments_distance = distance(segment1, segment2)
+    if sum_length < max_length_with_no_penalty:
+        return sum_length * segments_distance  # was: first_length * sum_length * segments_distance
+    return sum_length * 16
+
+
+def join_segments(segments, start, end, distances, sec_per_row, avg_track_length):
     '''
-    Caculate the multivariate normal density (pdf)
-
-    Keyword arguments:
-        x = numpy array of a "d x 1" sample vector
-        mu = numpy array of a "d x 1" mean vector
-        cov = inverted "numpy array of a d x d" covariance matrix
+    Both ends are included
+    :param segments: list of consecutive segments
+    :param start: position of the first segment
+    :param end: position of the last segment (inclusive)
+    :param distances: list of tuples (segment1, segment2, distance)
+    :return: nothing, all updates are performed in-place
     '''
-    # assert(mu.shape[0] > mu.shape[1]), 'mu must be a row vector'
-    # assert(x.shape[0] > x.shape[1]), 'x must be a row vector'
-    # assert(cov.shape[0] == cov.shape[1]), 'covariance matrix must be square'
-    # assert(mu.shape[0] == cov.shape[0]), 'cov_mat and mu_vec must have the same dimensions'
-    # assert(mu.shape[0] == x.shape[0]), 'mu and x must have the same dimensions'
-    d = x - mu
-    part2 = (-1/2) * (d.T.dot(cov_1)).dot(d)
-    return float(part1 * np.exp(part2))
+    deleted_segments = set(segments[start:end+1])
+    distances[:] = [x for x in distances if not (x[0] in deleted_segments or x[1] in deleted_segments)]
+
+    new_feature_vector = segments[start].feature_vector * segments[start].length
+    for k in range(start + 1, end + 1):
+        new_feature_vector += (segments[k].feature_vector * segments[k].length)
+    new_feature_vector /= (segments[end].end - segments[start].start)
+    new_segment = Segment(segments[start].start, segments[end].end, new_feature_vector)
+
+    del(segments[start:end+1])
+    segments.insert(start, new_segment)
+
+    window = 600.0 / sec_per_row
+    max_sum_length = avg_track_length * 1.25 / sec_per_row
+    new_segment_start = new_segment.start
+    for segment in segments:
+        if segment != new_segment and abs(segment.start - new_segment_start) < window:
+            if segment.start > new_segment_start:
+                distances.append((new_segment, segment, key_function(new_segment, segment, max_sum_length)))
+            else:
+                distances.append((segment, new_segment, key_function(segment, new_segment, max_sum_length)))
 
 
-def get_checkerboard(size):
-    o = numpy.ones([size, size])
-    xs = np.linspace(-1, 1, 2 * size)
-    ys = np.linspace(-1, 1, 2 * size)
-    result = numpy.array(numpy.bmat([[-o, o], [o, -o]]))
-    mu = numpy.array([0, 0])
-    cov = numpy.array([[1, 0], [0, 1]])
-    cov_1 = np.linalg.inv(cov)
-    part1 = 1 / ( ((2*np.pi)**(len(mu)/2)) * (np.linalg.det(cov)**(1/2)) )
-    ix = 0
-    for x in xs:
-        iy = 0
-        for y in ys:
-            value = pdf_multivariate_gauss(numpy.array([x, y]), mu, cov_1, part1)
-            result[ix][iy] *= value
-            iy += 1
-        ix += 1
-    return result
+def get_distances(segments, sec_per_row, avg_track_length):
+    distances = []
+    max_sum_length = avg_track_length * 1.25 / sec_per_row
+    for i in range(len(segments)):
+        segment1 = segments[i]
+        for j in range(i+1, len(segments)):
+            segment2 = segments[j]
+            distances.append((segment1, segment2, key_function(segment1, segment2, max_sum_length)))
+    return distances
+
+
+def get_initial_borders(novelty):
+    borders = argrelextrema(numpy.array(novelty), numpy.greater)
+    borders = numpy.insert(borders, 0, 0)
+    borders = numpy.append(borders, len(novelty))
+    return borders
+
+
+def get_segments(borders, feature_vectors):
+    return [Segment(borders[i], borders[i+1], feature_vectors[i]) for i in range(len(borders) - 1)]
+
+
+def get_borders(segments):
+    borders = [segments[0].start]
+    borders.extend([segment.end for segment in segments])
+    return borders
+
 
 def calc_self_similarity(data, factor):
     # reduce data size to calculate self-similarity
-    data10 = []
-    for i in xrange(data.shape[0] / factor):
-        temp = data[i * factor: (i + 1) * factor]
-        data10.append(numpy.average(temp, axis=0))
+    data10 = [numpy.average(data[i * factor: (i + 1) * factor], axis=0) for i in xrange(data.shape[0] / factor)]
     data10 = numpy.array(data10)
-    # data10 = data
-    # factor = 1
     selfsim = numpy.zeros([data10.shape[0], data10.shape[0]])
     for i in xrange(data10.shape[0]):
         left = max(0, i - 300)
@@ -98,95 +180,28 @@ def calc_self_similarity(data, factor):
     return selfsim
 
 
-def remove_most_similar(data, borders, factor, sec_per_row, novelty, avg_track_length):
-    filtered = set(borders)
-    i = 1
-    similar = []
-    bl = len(borders)
-    novelties = numpy.array([novelty[borders[i]] for i in range(bl-1)])
-    avg_novelty = numpy.average(novelties)
-
-    # separate handling for the very first and the very last segments
-    # if (borders[1] - borders[0]) * sec_per_row < 10:
-    #     similar.append((borders[0], borders[1], borders[1] - borders[0], 0.001))
-    # if (borders[bl-1] - borders[bl-2]) * sec_per_row < 10:
-    #     similar.append((borders[bl-2], borders[bl-1], borders[bl-1] - borders[bl-2], 0.001))
-
-    def normalize_to_01(x):
-        m = numpy.max(numpy.abs(x))
-        if m == 0:
-            m = 1
+def normalize_to_01(x):
+    m = numpy.max(numpy.abs(x))
+    if m != 0:
         x /= m
 
-    for i in range(bl - 1):
+
+def get_feature_vectors(data, factor, borders):
+    vectors = []
+    for i in range(len(borders) - 1):
         l1 = borders[i]
         r1 = borders[i+1]
-        source = numpy.average(data[l1 * factor: r1 * factor], axis=0)
-        normalize_to_01(source)
-        nov = 0
-        for j in range(i + 1, bl - 1):
-            nov += novelty[borders[j]]
-            if abs(borders[j] - l1) * sec_per_row < 600:
-                l2 = borders[j]
-                r2 = borders[j+1]
-                target = numpy.average(data[l2 * factor: r2 * factor], axis=0)
-                normalize_to_01(target)
-                similar.append((l1, r1, l2, r2, numpy.linalg.norm(source - target), nov*1.0/(j-i)))
-
-    def key_function(t):
-        # t == (left1, right1, left2, right2, distance, novelty)
-        sum_length = t[3]-t[0]
-        first_length = t[1]-t[0]
-        step = t[2] - t[0]
-        # if l1 == 0 and 5 < d * sec_per_row < 60:
-        #     return 100000
-        distance = t[4]
-        if sum_length * sec_per_row > avg_track_length * 1.25:
-            return 100000 * sum_length
-        return sum_length * distance  # TODO: was first_length * sum_length * distance
-
-    similar = sorted(similar, key=key_function)
-    min = similar[0][0]
-    max = similar[0][2]
-    filtered = [x for x in borders if x <= min or x > max]
-    # print [x * sec_per_row for x in filtered]
-    return sorted(filtered)
-    #return filtered
+        vector = numpy.average(data[l1 * factor: r1 * factor], axis=0)
+        normalize_to_01(vector)
+        vectors.append(vector)
+    return vectors
 
 
-def init_borders2(self_sim):
-    size = 8
-    checkerboard = get_checkerboard(size)
-    i = 0
-    squareness = []
-    borders = [0]
-    self_sim_size = self_sim.shape[0]
-    for i in range(self_sim_size):
-        if i < size:
-            r = numpy.ix_(range(size - i, 2 * size), range(size - i, 2 * size))
-            cb = checkerboard[r]
-            ssr = numpy.ix_(range(0, cb.shape[0]), range(0, cb.shape[0]))
-        elif i > self_sim.shape[0] - size:
-            d = self_sim.shape[0] - i
-            r = numpy.ix_(range(0, size + d), range(0, size + d))
-            cb = checkerboard[r]
-            ssr = numpy.ix_(range(self_sim_size - cb.shape[0], self_sim_size), range(self_sim_size - cb.shape[0], self_sim_size))
-        else:
-            cb = checkerboard
-            ssr = numpy.ix_(range(i - size, i + size), range(i - size, i + size))
-        fragment = self_sim[ssr]
-        sq = scipy.signal.convolve2d(cb, fragment, mode='valid')
-        squareness.append(sq[0][0])
-    for i in range(self_sim_size):
-        if 0 < i < self_sim_size - 1 and squareness[i] > squareness[i-1] and squareness[i] > squareness[i+1]:
-            borders.append(i)
-    borders.append(self_sim_size)
-    return borders, squareness
-
-
-def detect_track_borders(data, length_in_sec, tracks, self_sim=None, factor=None, sim_file=None, has_intro=False, has_outro=False):
-    data = log(data)
-    data = scipy.signal.medfilt2d(data, kernel_size=(31, 1))
+def detect_track_borders(data, length_in_sec, tracks, novelty_calculator, self_sim=None, factor=None, sim_file=None,
+                         has_intro=False, has_outro=False, preprocess=True):
+    if preprocess:
+        data = numpy.log(1e6 * data + 1)
+        data = scipy.signal.medfilt2d(data, kernel_size=(31, 1))
     if self_sim is None or factor is None:
         factor = 10
         self_sim = calc_self_similarity(data, factor)
@@ -197,42 +212,57 @@ def detect_track_borders(data, length_in_sec, tracks, self_sim=None, factor=None
     # remove segments which are too short
     sec_per_row = length_in_sec / self_sim.shape[0]
     avg_track_length = length_in_sec / tracks
-    filtered, novelty = init_borders2(self_sim)
+    novelty = novelty_calculator.calc_novelty(self_sim)
+    borders = get_initial_borders(novelty)
 
     intro_borders = []
-    outro_borders = []
     if has_intro:
         max_novelty = 0
         max_position = 1
         i = max_position
-        while filtered[i] * sec_per_row <= 60:
+        while borders[i] * sec_per_row <= 60:
             if novelty[i] > max_novelty:
                 max_novelty = novelty[i]
                 max_position = i
             i += 1
         intro_borders = [0]
-        filtered = filtered[max_position:]
+        borders = borders[max_position:]
         tracks -= 1
     if has_outro:
         max_novelty = 0
-        max_position = len(filtered) - 2
+        max_position = len(borders) - 2
         i = max_position
-        while (self_sim.shape[0] - filtered[i]) * sec_per_row <= 60:
+        while (self_sim.shape[0] - borders[i]) * sec_per_row <= 60:
             if novelty[i] > max_novelty:
                 max_novelty = novelty[i]
                 max_position = i
             i -= 1
-        outro_borders = [self_sim.shape[0]]
-        filtered = filtered[:max_position + 1]
+        borders = borders[:max_position + 1]
         tracks -= 1
 
-    while len(filtered) > tracks + 1:
-        filtered = remove_most_similar(data, filtered, factor, sec_per_row, novelty, avg_track_length)
-    intro_borders.extend(filtered)
+    if preprocess:
+        feature_vectors = get_feature_vectors(data, factor, borders)
+    else:
+        feature_vectors = data
+
+    segments = get_segments(borders, feature_vectors)
+    distances = get_distances(segments, sec_per_row, avg_track_length)
+    segment_indices = dict((x, i) for i, x in enumerate(segments))
+    while len(segments) > tracks:
+        distances = sorted(distances, key=operator.itemgetter(2))
+        for d in distances:
+            index1 = segment_indices[d[1]]
+            index0 = segment_indices[d[0]]
+            if index0 + len(segments) - index1 >= tracks:
+                break
+        join_segments(segments, index0, index1, distances, sec_per_row, avg_track_length)
+        segment_indices = dict((x, i) for i, x in enumerate(segments))
+    borders = get_borders(segments)
+
+    intro_borders.extend(borders)
     if has_outro:
         intro_borders.append(self_sim.shape[0])
-    filtered = intro_borders
+    borders = intro_borders
 
-    filtered = [x * sec_per_row for x in filtered]
-    return filtered
-
+    borders = [x * sec_per_row for x in borders]
+    return borders
