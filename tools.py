@@ -191,7 +191,7 @@ def get_feature_vectors(data, factor, borders):
     for i in range(len(borders) - 1):
         l1 = borders[i]
         r1 = borders[i+1]
-        vector = numpy.average(data[l1 * factor: r1 * factor], axis=0)
+        vector = numpy.mean(data[l1 * factor: r1 * factor], axis=0)
         normalize_to_01(vector)
         vectors.append(vector)
     return vectors
@@ -201,7 +201,7 @@ def detect_track_borders(data, length_in_sec, tracks, novelty_calculator, self_s
                          has_intro=False, has_outro=False, preprocess=True):
     if preprocess:
         data = numpy.log(1e6 * data + 1)
-        data = scipy.signal.medfilt2d(data, kernel_size=(31, 1))
+        # data = scipy.signal.medfilt2d(data, kernel_size=(31, 1))
     if self_sim is None or factor is None:
         factor = 10
         self_sim = calc_self_similarity(data, factor)
@@ -215,28 +215,14 @@ def detect_track_borders(data, length_in_sec, tracks, novelty_calculator, self_s
     novelty = novelty_calculator.calc_novelty(self_sim)
     borders = get_initial_borders(novelty)
 
-    intro_borders = []
     if has_intro:
-        max_novelty = 0
-        max_position = 1
-        i = max_position
-        while borders[i] * sec_per_row <= 60:
-            if novelty[i] > max_novelty:
-                max_novelty = novelty[i]
-                max_position = i
-            i += 1
-        intro_borders = [0]
+        first_60_seconds = borders[borders < 60.0 / sec_per_row]
+        max_position = numpy.argmax(first_60_seconds)
         borders = borders[max_position:]
         tracks -= 1
     if has_outro:
-        max_novelty = 0
-        max_position = len(borders) - 2
-        i = max_position
-        while (self_sim.shape[0] - borders[i]) * sec_per_row <= 60:
-            if novelty[i] > max_novelty:
-                max_novelty = novelty[i]
-                max_position = i
-            i -= 1
+        last_60_seconds = borders[borders > self_sim.shape[0] - 60.0 / sec_per_row]
+        max_position = len(borders) - len(last_60_seconds) + numpy.argmax(last_60_seconds)
         borders = borders[:max_position + 1]
         tracks -= 1
 
@@ -257,12 +243,11 @@ def detect_track_borders(data, length_in_sec, tracks, novelty_calculator, self_s
                 break
         join_segments(segments, index0, index1, distances, sec_per_row, avg_track_length)
         segment_indices = dict((x, i) for i, x in enumerate(segments))
+
     borders = get_borders(segments)
-
-    intro_borders.extend(borders)
+    if has_intro:
+        borders.insert(0, 0)
     if has_outro:
-        intro_borders.append(self_sim.shape[0])
-    borders = intro_borders
+        borders.append(self_sim.shape[0])
 
-    borders = [x * sec_per_row for x in borders]
-    return borders
+    return [x * sec_per_row for x in borders]
