@@ -10,8 +10,8 @@ import cProfile
 
 
 plugin_suffix = '_vamp_qm-vamp-plugins_qm-constantq_constantq'
-vamp_path = 'E:/Study/sci-work/Software/sonic-annotator-1.0-win32/sonic-annotator.exe'
-n3_path = 'E:/Study/sci-work/Software/sonic-annotator-1.0-win32/constantq.n3'
+vamp_path = 'sonic-annotator-1.0-win32/sonic-annotator.exe'
+n3_path = 'config/constantq_hires.n3'
 
 
 def read_csv(filename):
@@ -25,6 +25,11 @@ def read_csv(filename):
     data = numpy.array(data)
     timestamps = numpy.array(timestamps)
     return timestamps, data
+
+
+def replace_csv(timestamps, data, csv_file, npz_file):
+    numpy.savez(npz_file, timestamps=timestamps, data=data)
+    os.remove(csv_file)
 
 
 def read_cue(filename):
@@ -87,7 +92,7 @@ def print_results(results, log):
 
 
 def main():
-    data_dir = os.path.join('.', 'data')
+    data_dir = os.path.join('.', 'temp_data')
     mp3_files = [f for f in os.listdir(data_dir) if os.path.isfile(os.path.join(data_dir, f)) and f.endswith('.mp3')]
     result = []
     nc = tools.NoveltyCalculator()
@@ -107,14 +112,24 @@ def main():
                 #has_intro = False
                 #has_outro = False
                 csv_file = os.path.join(data_dir, name + plugin_suffix + '.csv')
+                npz_file = os.path.join(data_dir, name + plugin_suffix + '.npz')
                 self_sim_file = os.path.join(data_dir, name + plugin_suffix + '.sim')
-                if not os.path.isfile(csv_file):
+                if not os.path.isfile(csv_file) and not os.path.isfile(npz_file):
                     extract_features(os.path.join(data_dir, mp3))
-                if os.path.isfile(csv_file):
+                if os.path.isfile(npz_file):
+                    saved = numpy.load(npz_file)
+                    timestamps = saved['timestamps']
+                    data = saved['data']
+                elif os.path.isfile(csv_file):
                     (timestamps, data) = read_csv(csv_file)
+                    replace_csv(timestamps, data, csv_file, npz_file)
+                if timestamps is not None and data is not None:
                     if os.path.isfile(self_sim_file):
-                        with open(self_sim_file, 'rb') as f:
-                            (self_sim, factor) = cPickle.load(f)
+                        saved = numpy.load(self_sim_file)
+                        self_sim = saved['self_sim']
+                        factor = saved['factor'][0]
+                        # with open(self_sim_file, 'rb') as f:
+                            # (self_sim, factor) = cPickle.load(f)
                         borders = tools.detect_track_borders(data,
                                                              timestamps[-1],
                                                              len(info),
@@ -127,10 +142,10 @@ def main():
                         borders = tools.detect_track_borders(data,
                                                              timestamps[-1],
                                                              len(info),
+                                                             nc,
                                                              sim_file=self_sim_file,
                                                              has_intro=has_intro,
                                                              has_outro=has_outro)
-                    # borders = tools.detect_track_borders(data, timestamps[-1], len(info))
                     avg_diff, max_diff = get_diff(info, borders)
                     result.append({'name': mp3, 'info': info, 'borders': borders, 'avg_diff': avg_diff, 'max_diff': max_diff})
                     print '%s\t%f\t%f' % (mp3, avg_diff, max_diff)

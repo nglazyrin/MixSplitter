@@ -96,7 +96,7 @@ class Segment():
 
 def distance(segment1, segment2):
     #return numpy.linalg.norm(segment1.normalized_feature_vector - segment2.normalized_feature_vector)
-    return cosine(segment1.normalized_feature_vector, segment2.normalized_feature_vector)
+    return cosine(segment1.feature_vector, segment2.feature_vector)
 
 
 def key_function(segment1, segment2, max_length_with_no_penalty):
@@ -107,7 +107,7 @@ def key_function(segment1, segment2, max_length_with_no_penalty):
     return sum_length * 16
 
 
-def join_segments(segments, start, end, distances, sec_per_row, avg_track_length):
+def join_segments(segments, start, end, distances, sec_per_row, avg_track_length, data, factor):
     '''
     Both ends are included
     :param segments: list of consecutive segments
@@ -119,10 +119,11 @@ def join_segments(segments, start, end, distances, sec_per_row, avg_track_length
     deleted_segments = set(segments[start:end+1])
     distances[:] = [x for x in distances if not (x[0] in deleted_segments or x[1] in deleted_segments)]
 
-    new_feature_vector = segments[start].feature_vector * segments[start].length
-    for k in range(start + 1, end + 1):
-        new_feature_vector += (segments[k].feature_vector * segments[k].length)
-    new_feature_vector /= (segments[end].end - segments[start].start)
+    # new_feature_vector = segments[start].feature_vector * segments[start].length
+    # for k in range(start + 1, end + 1):
+    #     new_feature_vector += (segments[k].feature_vector * segments[k].length)
+    # new_feature_vector /= (segments[end].end - segments[start].start)
+    new_feature_vector = get_feature_vector(data, segments[start].start * factor, segments[end].end * factor)
     new_segment = Segment(segments[start].start, segments[end].end, new_feature_vector)
 
     del(segments[start:end+1])
@@ -186,14 +187,73 @@ def normalize_to_01(x):
         x /= m
 
 
+def get_feature_vector(data, start, end):
+    subset = data[start: end]
+    vector1 = numpy.mean(subset, axis=0)
+    normalize_to_01(vector1)
+
+    energy = numpy.sum(subset, axis=1)
+    local_max = argrelextrema(energy, numpy.greater)[0]
+    local_min = argrelextrema(energy, numpy.less)[0]
+    avg_max = numpy.average(energy[local_max])
+    avg_min = numpy.average(energy[local_min])
+    i = 0
+    j = 0
+    local_attacks = {'slow': [], 'fast': []}
+    local_decays = {'slow': [], 'fast': []}
+    while i < len(local_max) and j < len(local_min):
+        value = (energy[local_max[i]] - energy[local_min[j]]) / abs(local_max[i] - local_min[j])
+        peak_type = 'fast' if energy[local_max[i]] > avg_max else 'slow'
+        if local_max[i] > local_min[j]:
+            local_attacks[peak_type].append(value)
+            j += 1
+        else:
+            local_decays[peak_type].append(value)
+            i += 1
+    vector2 = numpy.array([#numpy.mean(local_attacks['slow']), numpy.std(local_attacks['slow']),
+                           numpy.mean(local_attacks['fast']), numpy.std(local_attacks['fast']),
+                           #numpy.mean(local_decays['slow']), numpy.std(local_decays['slow']),
+                           numpy.mean(local_decays['fast']), numpy.std(local_decays['fast']),
+                           avg_max / avg_min])
+    '''
+    attacks = []
+    decays = []
+    for row in range(subset.shape[1]):
+        # energy = numpy.sum(subset, axis=1)
+        energy = subset[:, row]
+        local_max = argrelextrema(energy, numpy.greater)[0]
+        local_min = argrelextrema(energy, numpy.less)[0]
+        local_attacks = 0
+        local_decays = 0
+        while i < len(local_max) and j < len(local_min):
+            value = (energy[local_max[i]] - energy[local_min[j]]) / abs(local_max[i] - local_min[j])
+            if local_max[i] > local_min[j]:
+                local_attacks += value
+                j += 1
+            else:
+                local_decays += value
+                i += 1
+        attacks.append(local_attacks)
+        decays.append(local_decays)
+    '''
+    # vector2 = numpy.array(attacks)
+    normalize_to_01(vector2)
+    # vector3 = numpy.array(decays)
+    # normalize_to_01(vector3)
+    return numpy.concatenate((vector1, vector2), axis=0)
+    # return numpy.concatenate((vector1, vector2, vector3), axis=0)
+    # return vector2
+
+
 def get_feature_vectors(data, factor, borders):
     vectors = []
     for i in range(len(borders) - 1):
-        l1 = borders[i]
-        r1 = borders[i+1]
-        vector = numpy.mean(data[l1 * factor: r1 * factor], axis=0)
-        normalize_to_01(vector)
-        vectors.append(vector)
+        start = borders[i] * factor
+        end = borders[i+1] * factor
+        vectors.append(get_feature_vector(data, start, end))
+    # energy = numpy.sum(data[borders[4] * factor: borders[5] * factor], axis=1)
+    # plt.plot(energy)
+    # plt.show()
     return vectors
 
 
@@ -203,11 +263,12 @@ def detect_track_borders(data, length_in_sec, tracks, novelty_calculator, self_s
         data = numpy.log(1e6 * data + 1)
         # data = scipy.signal.medfilt2d(data, kernel_size=(31, 1))
     if self_sim is None or factor is None:
-        factor = 10
+        factor = 80
         self_sim = calc_self_similarity(data, factor)
         if sim_file:
-            with open(sim_file, 'wb') as f:
-                cPickle.dump((self_sim, factor), f)
+            numpy.savez(sim_file, self_sim=self_sim, factor=factor)
+            # with open(sim_file, 'wb') as f:
+                # cPickle.dump((self_sim, factor), f)
 
     # remove segments which are too short
     sec_per_row = length_in_sec / self_sim.shape[0]
@@ -234,6 +295,16 @@ def detect_track_borders(data, length_in_sec, tracks, novelty_calculator, self_s
     segments = get_segments(borders, feature_vectors)
     distances = get_distances(segments, sec_per_row, avg_track_length)
     segment_indices = dict((x, i) for i, x in enumerate(segments))
+
+    image_data = numpy.zeros([len(segments), len(segments)])
+    for d in distances:
+        x = segment_indices[d[0]]
+        y = segment_indices[d[1]]
+        value = math.log10(1 + d[2])
+        image_data[x, y] = image_data[y, x] = value
+    #plt.imshow(image_data, interpolation='nearest')
+    #plt.show()
+
     while len(segments) > tracks:
         distances = sorted(distances, key=operator.itemgetter(2))
         for d in distances:
@@ -241,7 +312,7 @@ def detect_track_borders(data, length_in_sec, tracks, novelty_calculator, self_s
             index0 = segment_indices[d[0]]
             if index0 + len(segments) - index1 >= tracks:
                 break
-        join_segments(segments, index0, index1, distances, sec_per_row, avg_track_length)
+        join_segments(segments, index0, index1, distances, sec_per_row, avg_track_length, data, factor)
         segment_indices = dict((x, i) for i, x in enumerate(segments))
 
     borders = get_borders(segments)
