@@ -51,13 +51,13 @@ def as_time(seconds):
     return "%02d:%02d" % (m, s)
 
 
-def intersect(borders, true_borders, delta=40):
+def intersect(borders, true_borders, delta=120):
     added = []
     true_matched = []
     for border in borders:
         matched = False
         for true_border in true_borders:
-            if abs(true_border - border) < delta:
+            if abs(true_border - border) < delta and not true_border in true_matched:
                 true_matched.append(true_border)
                 matched = True
                 break
@@ -89,12 +89,12 @@ naive = []
 style_stats = {}
 intro_size = 30
 outro_size = 30
-with open(os.path.join('logs', 'test.log'), 'rb') as log:
+with open(os.path.join('logs', 'test_beat_profile.log'), 'rb') as log:
     for line in log:
         rec = line.strip().split('\t')
         if len(rec) > 2:
             name = rec[0]
-            info = read_cue(os.path.join('data', name[:-4] + '.cue'))
+            info = read_cue(os.path.join('temp_data', name[:-4] + '.cue'))
             # indices = numpy.array([info[i+1]['INDEX'] - info[i]['INDEX'] for i in range(len(info)-1)])
             indices = [info[i]['INDEX'] for i in range(len(info))]
             has_intro = 'intro' in info[0]['TITLE'].lower()
@@ -102,13 +102,14 @@ with open(os.path.join('logs', 'test.log'), 'rb') as log:
             # has_intro = False
             # has_outro = False
             avg = float(rec[1])
+            max_diff = float(rec[2])
 
             borders = rec[3][1:-1].split(',')
             borders = [float(x) for x in borders]
             length = borders[-1]
             indices.append(length)
             tracks = len(info)
-            even = build_even(length, tracks, has_intro, has_outro, 30, 30)
+            even = build_even(length, tracks, has_intro, has_outro, intro_size, outro_size)
 
             even_avg, even_max = get_diff(info, even)
             even_avg_sum += even_avg
@@ -129,20 +130,22 @@ with open(os.path.join('logs', 'test.log'), 'rb') as log:
             naive.append(even_avg)
 
             added, removed = intersect(borders, indices)
-            print '\tAdded: %s' % added
-            print '\tRemoved: %s' % removed
+            if max_diff > 60:
+                print '\tAdded: %s' % added
+                print '\tRemoved: %s' % removed
 
             maximum = float(rec[2])
             # if avg < 0.5 * length/tracks:
-            if avg < 30:
+            if avg < 30 and max_diff < 60:
                 good += 1
             # if even_avg < 0.5 * length/tracks:
-            if even_avg < 30:
+            if even_avg < 30 and even_max < 60:
                 even_good += 1
             avg_sum += avg
             max_sum += maximum
             count += 1
 
+            '''
             if mix_styles[name] not in style_stats:
                 style_stats[mix_styles[name]] = {'count': 0, 'sum_avg': 0, 'sum_max': 0, 'sum_even_avg': 0, 'sum_even_max': 0}
             style_stats[mix_styles[name]]['count'] += 1
@@ -150,6 +153,7 @@ with open(os.path.join('logs', 'test.log'), 'rb') as log:
             style_stats[mix_styles[name]]['sum_max'] += maximum
             style_stats[mix_styles[name]]['sum_even_avg'] += even_avg
             style_stats[mix_styles[name]]['sum_even_max'] += even_max
+            '''
 
 print '%f\t%f' % (avg_sum * 1.0 / count, even_avg_sum * 1.0 / count)
 print '%f\t%f' % (max_sum * 1.0 / count, even_max_sum * 1.0 / count)
